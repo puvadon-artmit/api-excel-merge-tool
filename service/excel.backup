@@ -1,0 +1,141 @@
+type ExcelCopyService struct {
+	SourceFile string
+	TargetFile string
+}
+
+func (s *ExcelCopyService) CopySelectedColumns(cols []string, targetHeader []string) error {
+	// 1) เปิดไฟล์ต้นทาง (source)
+	source, err := excelize.OpenFile(s.SourceFile)
+	if err != nil {
+		return fmt.Errorf("เปิดไฟล์ต้นทางไม่สำเร็จ: %w", err)
+	}
+	defer source.Close()
+
+	sourceSheet := "Sheet1"
+	sourceRows, err := source.GetRows(sourceSheet)
+	if err != nil {
+		return fmt.Errorf("อ่านข้อมูลต้นทางล้มเหลว: %w", err)
+	}
+	if len(sourceRows) <= 1 {
+		return fmt.Errorf("ไฟล์ต้นทางไม่มีข้อมูลสำหรับคัดลอก")
+	}
+
+	// 2) เปิดหรือสร้างไฟล์ปลายทาง (target)
+	targetSheet := "Result"
+	var target *excelize.File
+	targetExists := false
+
+	if _, err := os.Stat(s.TargetFile); err == nil {
+		// มีไฟล์อยู่แล้ว → ใช้เป็น template
+		targetExists = true
+		target, err = excelize.OpenFile(s.TargetFile)
+		if err != nil {
+			return fmt.Errorf("เปิดไฟล์ปลายทางไม่สำเร็จ: %w", err)
+		}
+	} else {
+		// ไม่มีไฟล์ → สร้างใหม่ (style จะเป็น default)
+		target = excelize.NewFile()
+	}
+	defer target.Close()
+
+	// 2.1 ตรวจสอบว่ามีชีต targetSheet หรือยัง ถ้าไม่มีก็สร้าง
+	idx, err := target.GetSheetIndex(targetSheet)
+	if err != nil || idx == -1 {
+		idx, err = target.NewSheet(targetSheet)
+		if err != nil {
+			return fmt.Errorf("สร้างชีต %s ไม่สำเร็จ: %w", targetSheet, err)
+		}
+	}
+	target.SetActiveSheet(idx)
+
+	// อ่านข้อมูลเดิมใน target
+	existingRows, err := target.GetRows(targetSheet)
+	if err != nil {
+		return fmt.Errorf("อ่านข้อมูลจากชีตปลายทางล้มเหลว: %w", err)
+	}
+
+	// 3) สร้าง header ถ้ายังไม่มีแถวเลย
+	if len(existingRows) == 0 {
+		for i, h := range targetHeader {
+			colName, _ := excelize.ColumnNumberToName(i + 1) // 1 -> A, 2 -> B ...
+			cell := fmt.Sprintf("%s1", colName)
+			if err := target.SetCellValue(targetSheet, cell, h); err != nil {
+				return fmt.Errorf("เขียน header ที่ %s ไม่สำเร็จ: %w", cell, err)
+			}
+		}
+		// refresh rows หลังเขียน header ถ้าจำเป็นต้องใช้อีก
+		existingRows, err = target.GetRows(targetSheet)
+		if err != nil {
+			return fmt.Errorf("อ่านข้อมูลจากชีตหลังเขียน header ล้มเหลว: %w", err)
+		}
+	}
+
+	// 4) เตรียม map จาก source โดยใช้ ID เป็น key
+	keyCol := cols[0]                       // เช่น "A"
+	sourceData := make(map[string][]string) // map[ID][]ค่าตาม cols
+
+	for rowIndex := 1; rowIndex < len(sourceRows); rowIndex++ {
+		rowNum := rowIndex + 1 // แถวจริงใน Excel (เริ่มจาก 2)
+
+		// อ่านค่า key (ID)
+		keyValue, _ := source.GetCellValue(sourceSheet, fmt.Sprintf("%s%d", keyCol, rowNum))
+		if keyValue == "" {
+			continue
+		}
+
+		// อ่านค่าตามทุกคอลัมน์ใน cols
+		record := make([]string, len(cols))
+		for i, col := range cols {
+			v, _ := source.GetCellValue(sourceSheet, fmt.Sprintf("%s%d", col, rowNum))
+			record[i] = v
+		}
+
+		sourceData[keyValue] = record
+	}
+
+	// 5) เติมข้อมูลลง target ตาม ID ในคอลัมน์ A
+	targetRows, err := target.GetRows(targetSheet)
+	if err != nil {
+		return fmt.Errorf("อ่านข้อมูลจากชีตปลายทางล้มเหลว: %w", err)
+	}
+
+	for rowIndex := 1; rowIndex < len(targetRows); rowIndex++ {
+		excelRowNum := rowIndex + 1 // แถวจริงใน Excel
+
+		// อ่าน ID จากคอลัมน์ A ของ target
+		id, _ := target.GetCellValue(targetSheet, fmt.Sprintf("A%d", excelRowNum))
+		if id == "" {
+			continue
+		}
+
+		record, ok := sourceData[id]
+		if !ok {
+			continue
+		}
+
+		// เขียนค่าทุกคอลัมน์จาก record ลงคอลัมน์ 1..len(cols) ของ target
+		// (เช่น cols = ["A", "C", "D"] → เขียนลง target คอลัมน์ A,B,C)
+		for i, val := range record {
+			destColIndex := i + 1
+			colName, _ := excelize.ColumnNumberToName(destColIndex)
+			cell := fmt.Sprintf("%s%d", colName, excelRowNum)
+
+			if err := target.SetCellValue(targetSheet, cell, val); err != nil {
+				return fmt.Errorf("เขียนค่าที่ %s ไม่สำเร็จ: %w", cell, err)
+			}
+		}
+	}
+
+	// 6) บันทึกไฟล์ปลายทาง (แก้บนไฟล์เดิม → style template ยังอยู่)
+	if targetExists {
+		if err := target.Save(); err != nil {
+			return fmt.Errorf("บันทึกไฟล์ปลายทางล้มเหลว: %w", err)
+		}
+	} else {
+		if err := target.SaveAs(s.TargetFile); err != nil {
+			return fmt.Errorf("บันทึกไฟล์ปลายทางล้มเหลว: %w", err)
+		}
+	}
+
+	return nil
+}
