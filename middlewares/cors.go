@@ -22,6 +22,7 @@ var NewCorsMiddleware = cors.New(cors.Config{
 
 		// โดเมนจริง (ไม่มี path)
 		"https://www.prospira.co.th",
+		"http://10.144.1.103:8088",
 	}, ","),
 
 	AllowMethods: strings.Join([]string{
