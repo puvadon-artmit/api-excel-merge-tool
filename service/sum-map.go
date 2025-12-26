@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -106,8 +105,8 @@ func (s *ExcelCopyService) SumByCellMapping(
 		}
 
 		// ----- หารพัน + ปัดเศษ (.5 ขึ้น) -----
-		sum = sum / 1000.0
-		sum = math.Floor(sum + 0.5)
+		// sum = sum / 1000.0
+		// sum = math.Floor(sum + 0.1)
 
 		if err := target.SetCellValue(targetSheet, m.To, sum); err != nil {
 			return fmt.Errorf("เขียนผลรวมที่ %s ไม่สำเร็จ: %w", m.To, err)

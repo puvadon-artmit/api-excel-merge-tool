@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -90,7 +89,7 @@ func (s *ExcelCopyService) CopyByCellMapping(
 		// หารพัน
 		num = num / 1000.0
 
-		num = math.Round(num)
+		// num = math.Round(num)
 
 		// เขียนเป็นตัวเลขลง target
 		if err := target.SetCellValue(targetSheet, m.To, num); err != nil {
